@@ -69,14 +69,45 @@ for transaction in transactions:
 total_outstanding = 0
 for payee in transaction_dictionary.keys():
     transactions = transaction_dictionary[payee]
-    owed = sum(x['amount'] for x in transactions)
+    owed = sum(x['amount'] for x in transactions if x['amount'] < 0)
     total_outstanding += owed
     print("%s: $%.2f" % (payee, owed / -1000))
     for transaction in transactions:
+        if transaction['amount'] >= 0:
+            # TODO: Mark the inflow green
+            continue
+        if not transaction['memo']:
+            try:
+                parent_transaction = requests.get(ynab_root + 'transactions/%s' % transaction['parent_transaction_id'],
+                                                  headers=ynab_headers).json()['data']['transaction']
+                if parent_transaction['memo']:
+                    transaction['memo'] = parent_transaction['memo']
+                elif parent_transaction['payee_name']:
+                    transaction['memo'] = parent_transaction['payee_name']
+                else:
+                    transaction['memo'] = 'Not specified'
+
+                # Update the subtransaction memo if needed
+                #if transaction['memo'] != 'Not specified':
+#                    for subtrans in parent_transaction['subtransactions']:
+#                        if subtrans['id'] == transaction['id']:
+#                            subtrans['memo'] = transaction['memo']
+#
+#                    r = requests.put(ynab_root + 'transactions/%s' % parent_transaction['id'], headers=ynab_headers,
+#                                 json={'transaction': parent_transaction})
+#                    import json
+#                    print("sent %s" % json.dumps({'transaction': transaction}))
+#                    r.raise_for_status()
+#                    print(r.text)
+
+            except KeyError:
+                transaction['memo'] = 'YNAB bug'
         print("\t%s: $%.2f" % (transaction['memo'], transaction['amount'] / -1000))
 
-category_data = requests.get(ynab_root + 'categories/%s' % config['default']['category'],
-                             headers=ynab_headers).json()['data']['category']
+final_request = requests.get(ynab_root + 'categories/%s' % config['default']['category'], headers=ynab_headers)
+category_data = final_request.json()['data']['category']
+rate_limit = final_request.headers['X-Rate-Limit']
+
 print('Total outstanding: $%.2f' % (total_outstanding / -1000))
 print('Remaining Funds: $%.2f' % (category_data['balance'] / 1000))
 
@@ -84,7 +115,9 @@ if category_data['goal_target']:
     reconciliation = category_data['balance'] - (category_data['goal_target'] + total_outstanding)
     if reconciliation < 0:
         print('Missing funds: $%.2f' % (reconciliation / -1000))
-    else:
+    elif reconciliation > 0:
         print('Overfunded: $%.2f' % (reconciliation / 1000))
 else:
     print('Would check funds match if reimbursable goal funding set.')
+if int(rate_limit.split('/')[0]) > 150:
+    print('Rate limit: %s' % rate_limit)
